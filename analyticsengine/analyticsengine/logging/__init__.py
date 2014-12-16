@@ -6,7 +6,7 @@ import logging
 import logging.handlers as handlers
 import os
 import errno
-
+from analyticsengine.config import config
 
 class AELog(logging.Logger):
     def __init__(self, name):
@@ -65,7 +65,7 @@ class AELog(logging.Logger):
         self.aelog_format = logging.Formatter(log_format)
         self.aelog_fh.setFormatter(self.aelog_format)
 
-    def set_fh(self, fh):
+    def set_fh(self, fh=None):
         if fh is not None:
             self.aelog_fh = fh
         if self.aelog_fh is not None:
@@ -73,3 +73,8 @@ class AELog(logging.Logger):
 
 logging.setLoggerClass(AELog)
 LOG = logging.getLogger('MF-AE-LOG')
+LOG.setLevel(eval('logging.' + config.get('logger', 'level')))
+LOG.create_fh(config.get('logger', 'file_path'), config.get('logger', 'file_name'),
+              eval(config.get('logger', 'fh_log_level')))
+LOG.set_format(config.get('logger', 'format'))
+LOG.set_fh()
