@@ -48,7 +48,7 @@ class HttpConnection:
         self.build_req(data=data)
         if self.request is not None:
             try:
-                LOG.info("sending request to agentd")
+                LOG.info("sending request to MFC agentd - " + self.ip)
                 req_open = urlopen(self.request)
             except HTTPError, e:
                 LOG.critical("Error code: %s Error Message: %s"%(e.code, e.msg))
@@ -62,6 +62,6 @@ class HttpConnection:
                     LOG.debug("No HTTP errors.." + str(e))
                 raise e
             else:
-                LOG.debug("reading agentd response..")
+                LOG.debug("reading MFC agentd response - " + self.ip)
                 self.response = req_open.read()
                 return self.response
