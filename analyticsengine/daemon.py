@@ -1,19 +1,31 @@
 __author__ = 'sarink'
 
+import signal
 import gevent
+import gevent.subprocess
 from gevent import monkey
 monkey.patch_all()
-from analyticsengine.collector.tasks import run_request_fetch, run_request_parser, run_process_counters
+from analyticsengine.collector.tasks import run_request_fetch, run_request_parser, run_process_counters, \
+    run_store_ingestion
 from analyticsengine.logging import LOG
+from analyticsengine.dbmanager.mfc import create_daily_tables
 
 
 def run_collector():
     LOG.info("Starting collector..")
-    gevent.joinall([
-        gevent.spawn(run_process_counters),
-        gevent.spawn(run_request_parser),
-        gevent.spawn(run_request_fetch)
-    ])
+    gevent.signal(signal.SIGQUIT, gevent.kill)
+    create_daily_tables()
+    try:
+
+        tasks = [run_process_counters, run_request_parser, run_store_ingestion, run_request_fetch]
+        g_thread_pool = [gevent.spawn(task) for task in tasks]
+        gevent.joinall(g_thread_pool)
+    except KeyboardInterrupt:
+        print "Keyboard interrupt.."
+    finally:
+        #pass
+        gevent.killall(g_thread_pool, exception=gevent.GreenletExit)
+
 
 if __name__ == '__main__':
     run_collector()

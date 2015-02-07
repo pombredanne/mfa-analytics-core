@@ -61,7 +61,7 @@ class AELog(logging.Logger):
     # Logging format
     def set_format(self, log_format):
         if log_format is None:
-            log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            log_format = '%(asctime)s - %(funcName)s - %(levelname)s - %(message)s'
         self.aelog_format = logging.Formatter(log_format)
         self.aelog_fh.setFormatter(self.aelog_format)
 

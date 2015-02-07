@@ -3,7 +3,6 @@ import sys,os
 sys.path.append(os.environ['MF_AE_PATH'])
 from analyticsengine.config import celeryconfig
 from celery import Celery
-import redis
 
 celery = Celery(include=[
     'analyticsengine.collector.tasks'

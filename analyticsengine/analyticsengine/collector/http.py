@@ -1,10 +1,13 @@
 __author__ = 'sarink'
 
+from geventhttpclient import httplib
+httplib.patch()
+
 from urllib2 import Request, urlopen, URLError, HTTPError
 from analyticsengine.logging import LOG
 
 
-class HttpConnection:
+class MfcHttpConnection:
     def __init__(self, ip=None, port=None, uri=None):
         self.conn = None
         self.request = None
