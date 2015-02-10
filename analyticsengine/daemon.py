@@ -5,8 +5,8 @@ import gevent
 import gevent.subprocess
 from gevent import monkey
 monkey.patch_all()
-from analyticsengine.collector.tasks import run_request_fetch, run_request_parser, run_process_counters, \
-    run_store_ingestion
+from analyticsengine.collector.tasks import (get_device_list, run_request_fetch, run_request_parser,
+                                             run_process_counters, run_store_ingestion)
 from analyticsengine.logging import LOG
 from analyticsengine.dbmanager.mfc import create_daily_tables
 
@@ -14,10 +14,10 @@ from analyticsengine.dbmanager.mfc import create_daily_tables
 def run_collector():
     LOG.info("Starting collector..")
     gevent.signal(signal.SIGQUIT, gevent.kill)
+    get_device_list()
     create_daily_tables()
     try:
-
-        tasks = [run_process_counters, run_request_parser, run_store_ingestion, run_request_fetch]
+        tasks = [run_store_ingestion, run_process_counters, run_request_parser, run_request_fetch]
         g_thread_pool = [gevent.spawn(task) for task in tasks]
         gevent.joinall(g_thread_pool)
     except KeyboardInterrupt:
@@ -25,7 +25,6 @@ def run_collector():
     finally:
         #pass
         gevent.killall(g_thread_pool, exception=gevent.GreenletExit)
-
 
 if __name__ == '__main__':
     run_collector()

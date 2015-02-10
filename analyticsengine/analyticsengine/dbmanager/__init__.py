@@ -2,9 +2,6 @@
 
 __author__ = 'Juniper Networks'
 
-import MySQLdb
-import _mysql_exceptions
-
 from cassandra.cluster import Cluster, NoHostAvailable
 from cassandra import InvalidRequest
 from cassandra.protocol import SyntaxException
@@ -19,6 +16,8 @@ This will connect to the MFA MySQL DB.
 
 
 def connect_mysql():
+    import MySQLdb
+    import _mysql_exceptions
     try:
         mysql_db = MySQLdb.connect(host=config.get('mysql', 'db_host'),
                                    port=int(config.get('mysql', 'db_port')),
