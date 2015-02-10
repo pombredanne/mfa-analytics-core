@@ -1,3 +1,4 @@
+import sys
 import redis
 import redis.connection
 from redis_collections import Dict, List
@@ -8,7 +9,6 @@ import time
 import signal
 import gevent.pool
 import gevent.socket
-from geventhttpclient import HTTPClient, URL
 from celery import chain
 import decimal
 
@@ -19,7 +19,11 @@ from analyticsengine.logging import LOG
 from analyticsengine.parser import Parser
 from analyticsengine.parser.mfc.common import Serialize
 
-redis.connection.socket = gevent.socket
+from geventhttpclient import httplib
+httplib.patch()
+from geventhttpclient import HTTPClient, URL
+
+#redis.connection.socket = gevent.socket
 r = redis.Redis()
 keys = [config.get('constants', 'REDIS_DEV_LIST_KEY'),
         config.get('constants', 'REDIS_SYNC_DEV_LIST_KEY'),
@@ -212,17 +216,18 @@ def parse_config_mfc(data=None):
 def parse_counters(data=None):
     if data is None:
         data = r.blpop(config.get('constants', 'REDIS_XML_QUEUE_KEY'))
+    LOG.debug(data)
     data = eval(data[1])
     p_obj = Parser.parse_mfc_counters(data[0], data[1], data[2])
-    print p_obj
     r.rpush(config.get('constants', 'REDIS_PARSER_QUEUE_KEY'), Serialize.to_json(p_obj))
     return p_obj
 
 
 @celery.task
 def parse_cluster_stats():
+    xml_q = config.get('constants', 'REDIS_XML_QUEUE_KEY')
     while True:
-        data = r.blpop('mfc_xml_result_q')  #config.get('constants', 'REDIS_XML_QUEUE_KEY'))
+        data = r.blpop(xml_q)
         parse_counters.apply_async(args=[data], queue='parse', routing_key='parse.stats')
 
 
@@ -338,15 +343,16 @@ def store_mfc_stats():
         data = r.blpop(config.get('constants', 'REDIS_MFC_STORE_QUEUE_KEY'))
         counters = json.loads(data[1])
 
-        pk = glbl_bytes = glbl_ds = glbl_ram = glbl_req = {}
+        pk = glbl_bytes = glbl_ds = glbl_ram = glbl_req = glbl_tier = http_ns = sys_stat = dict()
 
-        """Primary Key."""
-        pk['mfcid'] = counters['device_id']
+        """Global stats."""
+        #Primary Key.
+        pk['mfcid'] = str(counters['device_id'])
         pk['hostname'] = counters['name']
         pk['ip'] = counters['ip']
         pk['ts'] = counters['data']['timestamp'] * 1000
 
-        """Global Bytes."""
+        #Global Bytes.
         glbl_bytes.update(pk)
         glbl_bytes['type'] = 'global'
         glbl_bytes['name'] = 'bytes'
@@ -357,7 +363,7 @@ def store_mfc_stats():
         #DailyMFCCounters.create(**glbl_bytes)
         db_connection.execute(DAILY_TABLE_INSERT, glbl_bytes)
 
-        """Global Disk Space."""
+        #Global Disk Space.
         glbl_ds.update(pk)
         glbl_ds['type'] = 'global'
         glbl_ds['name'] = 'disk_space'
@@ -368,7 +374,7 @@ def store_mfc_stats():
         #DailyMFCCounters.create(**glbl_ds)
         db_connection.execute(DAILY_TABLE_INSERT, glbl_ds)
 
-        """Global Ram Cache."""
+        #Global Ram Cache.
         glbl_ram.update(pk)
         glbl_ram['type'] = 'global'
         glbl_ram['name'] = 'ram_cache'
@@ -379,7 +385,7 @@ def store_mfc_stats():
         #DailyMFCCounters.create(**glbl_ram)
         db_connection.execute(DAILY_TABLE_INSERT, glbl_ram)
 
-        """Global Requests."""
+        #Global Requests.
         glbl_req.update(pk)
         glbl_req['type'] = 'global'
         glbl_req['name'] = 'requests'
@@ -389,6 +395,39 @@ def store_mfc_stats():
         #                         routing_key='store.stats')
         #DailyMFCCounters.create(**glbl_req)
         db_connection.execute(DAILY_TABLE_INSERT, glbl_req)
+
+        #Global Tiers.
+        glbl_tier.update(pk)
+        glbl_tier['type'] = 'global'
+        for tier in counters['data']['glbl']['tiers']:
+            glbl_tier['name'] = tier['provider']
+            tier.pop('provider')
+            glbl_tier['value'] = tier
+            db_connection.execute(DAILY_TABLE_INSERT, glbl_tier)
+
+        """Namespace Stats."""
+        http_ns.update(pk)
+        http_ns['type'] = 'http_ns'
+        for ns in counters['data']['services']['http']['namespaces']:
+            http_ns['name'] = ns['name'] + ':requests'
+            http_ns['value'] = ns['requests']
+            db_connection.execute(DAILY_TABLE_INSERT, http_ns)
+
+            http_ns['name'] = ns['name'] + ':bytes'
+            http_ns['value'] = ns['bytes']
+            db_connection.execute(DAILY_TABLE_INSERT, http_ns)
+
+        """System Stats."""
+        sys_stat.update(pk)
+        sys_stat['type'] = 'system'
+
+        sys_stat['name'] = 'cpu'
+        sys_stat['value'] = counters['data']['system']['cpu']
+        db_connection.execute(DAILY_TABLE_INSERT, sys_stat)
+
+        sys_stat['name'] = 'memory'
+        sys_stat['value'] = counters['data']['system']['memory']
+        db_connection.execute(DAILY_TABLE_INSERT, sys_stat)
 
         """MFC Summary Stats"""
         sum_stats = dict()
@@ -457,12 +496,9 @@ def terminate_task(task):
 
 """Task Runner."""
 
-
-def run_request_fetch(dev_list=None, get_dev_from_file=False):
+def get_device_list(get_dev_from_file=False):
     from analyticsengine import dbmanager
-
-    LOG.info("Starting request fetch task")
-    if dev_list is None and get_dev_from_file:
+    if get_dev_from_file:
         with open(config.get('constants', 'CONF_BASE_PATH') + config.get('constants', 'IP_LIST_FILENAME'), 'r') as fp:
             dev_list = fp.readlines()
             mfa_dev_list.extend(dev_list)
@@ -476,6 +512,11 @@ def run_request_fetch(dev_list=None, get_dev_from_file=False):
             mfa_dev_list.extend(rows)
             rows = mysql_cur.fetchmany(500)
         mysql_db.close()
+        #mfa_dev_list.extend([('2327015', 'Blaster-vJCE-005', '10.87.132.47'),])
+
+
+def run_request_fetch():
+    LOG.info("Starting request fetch task")
 
     req_interval = int(config.get('collector', 'MFC_REQUEST_FREQUENCY'))
 
@@ -485,10 +526,14 @@ def run_request_fetch(dev_list=None, get_dev_from_file=False):
     Prepare the list of MFCs that can be accessed. A hashmap of IP with UUID is created
     pass the SYNCd MFCs to fetch the stats.
     """
-    collector_task = chain(request_cluster_config.s(list(mfa_dev_list)),
-                           request_cluster_stats.s(interval=req_interval),
-                           )
-    collector_task.apply_async()
+    if len(mfa_dev_list) > 0:
+        collector_task = chain(request_cluster_config.s(list(mfa_dev_list)),
+                               request_cluster_stats.s(interval=req_interval),
+                               )
+        collector_task.apply_async()
+    else:
+        LOG.error("Devices list not found. Check file or MFA DB")
+        sys.exit(0)
 
     '''
     mfc_cnt = len(ip_list)
@@ -507,13 +552,13 @@ def run_request_fetch(dev_list=None, get_dev_from_file=False):
 
 def run_request_parser():
     LOG.info("Starting request parser task")
-    parse_cluster_task = parse_cluster_stats.apply_async(args=[])
+    parse_cluster_task = parse_cluster_stats.apply_async(args=[], queue='tasks', routing_key='tasks')
     LOG.info("Parse task runner with task ID: " + parse_cluster_task.task_id)
 
 
 def run_process_counters():
     LOG.info("Starting process counter task")
-    process_cluster_task = process_cluster_stats.apply_async(args=[])
+    process_cluster_task = process_cluster_stats.apply_async(args=[], queue='tasks', routing_key='tasks')
     LOG.info("Process task runner with task ID: " + process_cluster_task.task_id)
 
 
