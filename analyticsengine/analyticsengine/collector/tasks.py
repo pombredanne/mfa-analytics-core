@@ -246,7 +246,7 @@ def process_mfc_counters(counters=None, data=None):
                 counters['data']['glbl']['bytes']['disk'] + \
                 counters['data']['glbl']['bytes']['nfs'] + \
                 counters['data']['glbl']['bytes']['origin']
-    tot_cache = tot_bytes - counters['data']['glbl']['bytes']['origin']
+    tot_cache = counters['data']['glbl']['bytes']['ram'] + counters['data']['glbl']['bytes']['disk']
     counters['data']['chr'] = float((decimal.Decimal(tot_cache) / decimal.Decimal(tot_bytes)) * 100)
 
     r.rpush(config.get('constants', 'REDIS_MFC_STORE_QUEUE_KEY'), json.dumps(counters))
@@ -272,13 +272,17 @@ def process_cluster_stats():
 
     counters from across MFCs will be aggregated based on the sample ID.
     cluster[<Sample ID>][<Counter Name>] = Counter(<Dict of counter values>)
+
+    cluster['cumulative'][<Counter Name>] will be used to keep track of the cumulative of last sample
+    Delta will be calculated using above counter.
     """
     cluster = multi_dict_counter(2)  # 2 Level dictionary of Counter
 
     tick = lambda x: time.time() - x
     item_cnt = 0
     cur_sample = None
-    mfc_hash = Dict(key=config.get('constants', 'REDIS_MFC_UUID_HASH_KEY'), redis=r)
+    #mfc_hash = Dict(key=config.get('constants', 'REDIS_MFC_UUID_HASH_KEY'), redis=r)
+    sync_list = List(key=config.get('constants', 'REDIS_SYNC_DEV_LIST_KEY'), redis=r)
     cluster_sample_timeout = config.get('constants', 'CLUSTER_SAMPLE_TIMEOUT')
     store_q = config.get('constants', 'REDIS_CLUSTER_STORE_QUEUE_KEY')
 
@@ -295,7 +299,7 @@ def process_cluster_stats():
         # Requests
         cluster[counters['sample_id']]['requests'].update(counters['data']['glbl']['requests'])
 
-        # Bytes
+        #Cumulative Bytes
         cluster[counters['sample_id']]['bytes'].update(counters['data']['glbl']['bytes'])
 
         try:
@@ -306,9 +310,20 @@ def process_cluster_stats():
 
         if cur_sample is not None and cur_sample != counters['sample_id']:
             # new sample has arrived
-            if item_cnt > len(mfc_hash.keys()) or tick(init_sample_ts) >= cluster_sample_timeout:
+            if item_cnt > len(sync_list) or tick(init_sample_ts) >= cluster_sample_timeout:
                 # 1st case: record from all the Sync'd MFCs received. Store and remove the sample from cluster DS.
                 # or 2nd case: some data still left to be received but hit sample time out.
+
+                #Calculate cumulative Delta.
+                cluster[cur_sample]['cur_thrpt'] = cluster[cur_sample]['bytes'] - cluster['cumulative']['bytes']
+                cluster[cur_sample]['cur_thrpt']['total'] = sum(cluster[cur_sample]['cur_thrpt'].values())
+                cluster[cur_sample]['cur_thrpt']['cache'] = cluster[cur_sample]['cur_thrpt']['ram'] + \
+                                                            cluster[cur_sample]['cur_thrpt']['disk']
+
+                #Preserve the cumulative for next sample set
+                cluster['cumulative']['bytes'] = cluster[cur_sample]['bytes']
+
+                #Push to store the data
                 r.rpush(store_q, (cur_sample, dict(cluster[cur_sample])))
 
                 del cluster[cur_sample]
@@ -443,14 +458,19 @@ def store_mfc_stats():
 
 @celery.task
 def store_cluster_stats():
-    from analyticsengine.dbmanager.mfc.schema import CLUSTER_SUMMARY_TABLE_NAME, CLUSTER_SAMPLE_MAP_TABLE_NAME
+    from analyticsengine.dbmanager.mfc.schema import (CLUSTER_STATS_TABLE_NAME, CLUSTER_SUMMARY_TABLE_NAME,
+                                                      CLUSTER_SAMPLE_MAP_TABLE_NAME)
     from analyticsengine import dbmanager
     from collections import Counter
 
     db_connection = dbmanager.connect_cassandra()
-    DAILY_TABLE_INSERT = "INSERT INTO " + CLUSTER_SUMMARY_TABLE_NAME + """ (name, ts, sample_id, value)
+    DAILY_TABLE_INSERT = "INSERT INTO " + CLUSTER_STATS_TABLE_NAME + """ (name, ts, sample_id, value)
                         VALUES (%(name)s, %(ts)s, %(sample_id)s, %(value)s)
                         """
+    DAILY_SUMMARY_TABLE_INSERT = "INSERT INTO " + CLUSTER_SUMMARY_TABLE_NAME + """ (name, ts, sample_id, value)
+                        VALUES (%(name)s, %(ts)s, %(sample_id)s, %(value)s)
+                        """
+
     SAMPLE_MAP_INSERT = "INSERT INTO " + CLUSTER_SAMPLE_MAP_TABLE_NAME + """ (sample_id, ts, ip_list)
                         VALUES (%(sample_id)s, %(ts)s, %(ip_list)s)
                         """
@@ -459,7 +479,7 @@ def store_cluster_stats():
         sample_id, counters = eval(data[1])
 
         pk = glbl_req = glbl_bytes = sample_map = dict()
-        pk['ts'] = int(time.time())
+        pk['ts'] = int(time.time()) * 1000
 
         glbl_req.update(pk)
         glbl_req['name'] = 'gl_requests'
@@ -479,6 +499,15 @@ def store_cluster_stats():
         sample_map['sample_id'] = sample_id
         sample_map['ip_list'] = counters['ip_list']
         db_connection.execute(SAMPLE_MAP_INSERT, sample_map)
+
+        #Update clusterwide summary
+        cluster_sum = dict()
+        cluster_sum['name'] = 'cur_thrpt'
+        cluster_sum['ts'] = pk['ts']
+        cluster_sum['sample_id'] = sample_id
+        cluster_sum['value'] = dict(counters['cur_thrpt'])
+        db_connection.execute(DAILY_SUMMARY_TABLE_INSERT, cluster_sum)
+
 
 @celery.task
 def ingest_to_db(model, session, **kwargs):
