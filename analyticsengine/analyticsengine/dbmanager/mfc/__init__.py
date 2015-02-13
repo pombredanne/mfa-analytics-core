@@ -20,8 +20,8 @@ def create_daily_tables():
                         ts timestamp, value map<text, BigInt>, PRIMARY KEY (mfcid, type, name, ts))
                         """ % MFC_STATS_TABLE_NAME
     daily_tables['mfc_summary'] = """
-                        CREATE TABLE %s ( hostname varchar, ip varchar, ts timestamp, sample_id varchar,
-                        value map<text, text>, PRIMARY KEY (hostname, ip))
+                        CREATE TABLE %s ( mfcid varchar, hostname varchar, ip varchar, ts timestamp, sample_id varchar,
+                        value map<text, text>, PRIMARY KEY (mfcid))
                         """ % MFC_SUMMARY_TABLE_NAME
     daily_tables['cluster_stats'] = """
                         CREATE TABLE %s ( name varchar, ts timestamp,

@@ -2,6 +2,7 @@ import sys
 import redis
 import redis.connection
 from redis_collections import Dict, List
+from collections import defaultdict, Counter
 import json
 import uuid
 import re
@@ -27,7 +28,8 @@ from geventhttpclient import HTTPClient, URL
 r = redis.Redis()
 keys = [config.get('constants', 'REDIS_DEV_LIST_KEY'),
         config.get('constants', 'REDIS_SYNC_DEV_LIST_KEY'),
-        config.get('constants', 'REDIS_MFC_UUID_HASH_KEY')]
+        config.get('constants', 'REDIS_MFC_UUID_HASH_KEY'),
+        config.get('constants', 'REDIS_MFC_CUR_THRPT_KEY')]
 for key in keys:
     if r.exists(key):
         r.delete(key)
@@ -241,13 +243,24 @@ def process_mfc_counters(counters=None, data=None):
         data = r.blpop(config.get('constants', 'REDIS_PARSER_QUEUE_KEY'))
         counters = json.loads(data[1])
 
+    gl_bytes = Counter(counters['data']['glbl']['bytes'])
     # MFC CHR
-    tot_bytes = counters['data']['glbl']['bytes']['ram'] + \
-                counters['data']['glbl']['bytes']['disk'] + \
-                counters['data']['glbl']['bytes']['nfs'] + \
-                counters['data']['glbl']['bytes']['origin']
+    tot_bytes = sum(gl_bytes.values())
     tot_cache = counters['data']['glbl']['bytes']['ram'] + counters['data']['glbl']['bytes']['disk']
     counters['data']['chr'] = float((decimal.Decimal(tot_cache) / decimal.Decimal(tot_bytes)) * 100)
+
+    #Calculate current throughput
+    mfcs_cur_thrpt = Dict(key=config.get('constants', 'REDIS_MFC_CUR_THRPT_KEY'), redis=r)
+    try:
+        counters['data']['cur_thrpt'] = gl_bytes - mfcs_cur_thrpt[counters['device_id']]
+        counters['data']['cur_thrpt']['total'] = sum(counters['data']['cur_thrpt'].values())
+        counters['data']['cur_thrpt']['cache'] = counters['data']['cur_thrpt']['ram'] + \
+                                                 counters['data']['cur_thrpt']['disk']
+        mfcs_cur_thrpt[counters['device_id']] = gl_bytes
+    except KeyError:
+        LOG.debug("current throughput hashmap - Initial update for " + str(counters['device_id']))
+        counters['data']['cur_thrpt'] = mfcs_cur_thrpt[counters['device_id']] = gl_bytes
+        counters['data']['cur_thrpt']['total'] = counters['data']['cur_thrpt']['cache'] = 0
 
     r.rpush(config.get('constants', 'REDIS_MFC_STORE_QUEUE_KEY'), json.dumps(counters))
 
@@ -261,7 +274,6 @@ def process_cluster_counters(counters):
 
 @celery.task
 def process_cluster_stats():
-    from collections import defaultdict, Counter
 
     def multi_dict_counter(level):
         if level < 1:
@@ -285,6 +297,7 @@ def process_cluster_stats():
     sync_list = List(key=config.get('constants', 'REDIS_SYNC_DEV_LIST_KEY'), redis=r)
     cluster_sample_timeout = config.get('constants', 'CLUSTER_SAMPLE_TIMEOUT')
     store_q = config.get('constants', 'REDIS_CLUSTER_STORE_QUEUE_KEY')
+    req_interval = int(config.get('collector', 'MFC_REQUEST_FREQUENCY'))
 
     while True:
         data = r.blpop(config.get('constants', 'REDIS_PARSER_QUEUE_KEY'))
@@ -350,9 +363,10 @@ def store_mfc_stats():
     DAILY_TABLE_INSERT = "INSERT INTO " + MFC_STATS_TABLE_NAME + """ (mfcid, hostname, ip, ts, type, name, value)
                         VALUES (%(mfcid)s, %(hostname)s, %(ip)s, %(ts)s, %(type)s, %(name)s, %(value)s)
                         """
-    DAILY_TABLE_SUMMARY_INSERT = "INSERT INTO " + MFC_SUMMARY_TABLE_NAME + """ (hostname, ip, sample_id, ts, value)
-                        VALUES (%(hostname)s, %(ip)s, %(sample_id)s, %(ts)s, %(value)s)
+    DAILY_SUMMARY_INSERT = "INSERT INTO " + MFC_SUMMARY_TABLE_NAME + """ (mfcid, hostname, ip, sample_id, ts, value)
+                        VALUES (%(mfcid)s, %(hostname)s, %(ip)s, %(sample_id)s, %(ts)s, %(value)s)
                         """
+    req_interval = int(config.get('collector', 'MFC_REQUEST_FREQUENCY'))
 
     while True:
         data = r.blpop(config.get('constants', 'REDIS_MFC_STORE_QUEUE_KEY'))
@@ -446,6 +460,7 @@ def store_mfc_stats():
 
         """MFC Summary Stats"""
         sum_stats = dict()
+        sum_stats['mfcid'] = str(counters['device_id'])
         sum_stats['hostname'] = counters['name']
         sum_stats['ip'] = counters['ip']
         sum_stats['sample_id'] = counters['sample_id']
@@ -453,8 +468,10 @@ def store_mfc_stats():
         sum_stats['value'] = {}
         for k, v in counters['data']['glbl']['requests'].items():
             sum_stats['value'].update({'req_' + k: str(v)})
+        for k, v in counters['data']['cur_thrpt'].items():
+            sum_stats['value'].update({'cur_' + k: str(v/req_interval)})
         sum_stats['value'].update({'chr': str(counters['data']['chr'])})
-        db_connection.execute(DAILY_TABLE_SUMMARY_INSERT, sum_stats)
+        db_connection.execute(DAILY_SUMMARY_INSERT, sum_stats)
 
 @celery.task
 def store_cluster_stats():

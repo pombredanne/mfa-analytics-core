@@ -35,6 +35,7 @@ config.set('constants', 'REDIS_CONFIG_STORE_QUEUE_KEY', 'mfc_conf_store_q')
 config.set('constants', 'REDIS_MFC_UUID_HASH_KEY', 'mfc_uuid_hash')
 config.set('constants', 'REDIS_DEV_LIST_KEY', 'dev_list')
 config.set('constants', 'REDIS_SYNC_DEV_LIST_KEY', 'sync_dev_list')
+config.set('constants', 'REDIS_MFC_CUR_THRPT_KEY', 'mfc_cur_thrpt')
 # MySQL
 config.set('constants', 'MYSQL_CONNECT_TIMEOUT', 60)
 # DB Query
