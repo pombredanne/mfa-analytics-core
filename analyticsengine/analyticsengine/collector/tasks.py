@@ -455,6 +455,9 @@ def store_mfc_stats():
         db_connection.execute(DAILY_TABLE_INSERT, sys_stat)
 
         sys_stat['name'] = 'memory'
+        #System Memory is in KB. Converting to Bytes
+        for k, v in counters['data']['system']['memory'].items():
+            counters['data']['system']['memory'][k] = v * 1024
         sys_stat['value'] = counters['data']['system']['memory']
         db_connection.execute(DAILY_TABLE_INSERT, sys_stat)
 
