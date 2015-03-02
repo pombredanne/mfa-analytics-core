@@ -8,13 +8,14 @@ monkey.patch_all()
 from analyticsengine.collector.tasks import (get_device_list, run_request_fetch, run_request_parser,
                                              run_process_counters, run_store_ingestion)
 from analyticsengine.logging import LOG
-from analyticsengine.dbmanager.mfc import create_daily_tables
+from analyticsengine.dbmanager.mfc import create_cluster_tables, create_daily_tables
 
 
 def run_collector():
     LOG.info("Starting collector..")
     gevent.signal(signal.SIGQUIT, gevent.kill)
     get_device_list()
+    create_cluster_tables()
     create_daily_tables()
     try:
         tasks = [run_store_ingestion, run_process_counters, run_request_parser, run_request_fetch]

@@ -528,6 +528,47 @@ def store_cluster_stats():
         cluster_sum['value'] = dict(counters['cur_thrpt'])
         db_connection.execute(DAILY_SUMMARY_TABLE_INSERT, cluster_sum)
 
+@celery.task
+def store_mfc_config():
+    from analyticsengine.dbmanager.mfc.schema import MFC_CONFIG_TABLE_NAME
+    from analyticsengine import dbmanager
+    from datetime import datetime
+
+    db_connection = dbmanager.connect_cassandra()
+    CONFIG_TABLE_INSERT = "INSERT INTO " + MFC_CONFIG_TABLE_NAME + """ (mfcid, hostname, ip, ts, type, value)
+                        VALUES (%(mfcid)s, %(hostname)s, %(ip)s, %(ts)s, %(type)s, %(value)s)
+                        """
+    timestamp = lambda dt: long((dt - datetime.fromtimestamp(0)).total_seconds() * 1000)
+
+    while True:
+        data = r.blpop(config.get('constants', 'REDIS_CONFIG_STORE_QUEUE_KEY'))
+        conf_data = json.loads(data[1])
+
+        pk = conf = raw = dict()
+        #Primary Key.
+        pk['mfcid'] = str(conf_data['device_id'])
+        pk['hostname'] = conf_data['name']
+        pk['ip'] = conf_data['ip']
+        pk['ts'] = timestamp(datetime.now())
+
+        conf.update(pk)
+        conf['type'] = 'config'
+        conf['value'] = dict({
+            'host_id': conf_data['data']['config']['host_id'],
+            'version': conf_data['data']['config']['version'],
+            'licenses': json.dumps(conf_data['data']['config']['licenses']),
+            'network': json.dumps(conf_data['data']['config']['network']),
+            'ifcfg': json.dumps(conf_data['data']['config']['ifcfg']),
+            'namespaces': json.dumps(conf_data['data']['config']['namespaces']),
+        })
+        db_connection.execute(CONFIG_TABLE_INSERT, conf)
+
+        raw.update(pk)
+        raw['type'] = 'raw'
+        raw['value'] = dict({
+            'dump': json.dumps(conf_data['data']['config']['dump'])
+        })
+        db_connection.execute(CONFIG_TABLE_INSERT, raw)
 
 @celery.task
 def ingest_to_db(model, session, **kwargs):
@@ -615,5 +656,7 @@ def run_store_ingestion():
     LOG.info("Starting Storage task")
     store_mfc_task = store_mfc_stats.apply_async(args=[], queue='store', routing_key='store.mfc_stats')
     store_cluster_task = store_cluster_stats.apply_async(args=[], queue='store', routing_key='store.cluster_stats')
+    store_mfc_conf_task = store_mfc_config.apply_async(args=[], queue='store', routing_key='store.mfc_conf')
     LOG.info("Store MFC stats task runner with task ID: " + store_mfc_task.task_id)
-    LOG.info("Store MFC stats task runner with task ID: " + store_cluster_task.task_id)
+    LOG.info("Store Cluster stats task runner with task ID: " + store_cluster_task.task_id)
+    LOG.info("Store MFC Conf task runner with task ID: " + store_mfc_conf_task.task_id)
