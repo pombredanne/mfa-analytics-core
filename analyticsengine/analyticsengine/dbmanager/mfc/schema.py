@@ -38,11 +38,11 @@ class DailyClusterCounters(Model):
     value = columns.Map(columns.Text, columns.BigInt)
     sample_id = columns.Text()
 
-MFC_STATS_TABLE_NAME = 'mfc_stats_' + today.strftime('%m%d%Y')
-MFC_SUMMARY_TABLE_NAME = 'mfc_summary_' + today.strftime('%m%d%Y')
-CLUSTER_STATS_TABLE_NAME = 'cluster_stats_' + today.strftime('%m%d%Y')
-CLUSTER_SUMMARY_TABLE_NAME = 'cluster_summary_' + today.strftime('%m%d%Y')
-CLUSTER_SAMPLE_MAP_TABLE_NAME = 'cluster_sample_map' + today.strftime('%m%d%Y')
+MFC_STATS_TABLE_NAME = 'mfc_stats_'
+MFC_SUMMARY_TABLE_NAME = 'mfc_summary_'
+CLUSTER_STATS_TABLE_NAME = 'cluster_stats_'
+CLUSTER_SUMMARY_TABLE_NAME = 'cluster_summary_'
+CLUSTER_SAMPLE_MAP_TABLE_NAME = 'cluster_sample_map_'
 MFC_CONFIG_TABLE_NAME = 'mfc_config'
 
 DAILY_MFC_TABLE_INSERT = "INSERT INTO counters_" + today.strftime('%m%d%Y') + """

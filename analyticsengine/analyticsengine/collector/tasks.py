@@ -355,20 +355,26 @@ def process_cluster_stats():
 
 @celery.task
 def store_mfc_stats():
+    from datetime import date
     from analyticsengine import dbmanager
     from analyticsengine.dbmanager.mfc.schema import MFC_STATS_TABLE_NAME, MFC_SUMMARY_TABLE_NAME
 
     db_connection = dbmanager.connect_cassandra()
+    date_strf = lambda dt: dt.strftime('%m%d%Y')
 
-    DAILY_TABLE_INSERT = "INSERT INTO " + MFC_STATS_TABLE_NAME + """ (mfcid, hostname, ip, ts, type, name, value)
-                        VALUES (%(mfcid)s, %(hostname)s, %(ip)s, %(ts)s, %(type)s, %(name)s, %(value)s)
-                        """
-    DAILY_SUMMARY_INSERT = "INSERT INTO " + MFC_SUMMARY_TABLE_NAME + """ (mfcid, hostname, ip, sample_id, ts, value)
-                        VALUES (%(mfcid)s, %(hostname)s, %(ip)s, %(sample_id)s, %(ts)s, %(value)s)
-                        """
     req_interval = int(config.get('collector', 'MFC_REQUEST_FREQUENCY'))
 
     while True:
+        today = date_strf(date.today())
+        DAILY_TABLE_INSERT = "INSERT INTO " + MFC_STATS_TABLE_NAME + today + \
+                             """ (mfcid, hostname, ip, ts, type, name, value)
+                             VALUES (%(mfcid)s, %(hostname)s, %(ip)s, %(ts)s, %(type)s, %(name)s, %(value)s)
+                             """
+        DAILY_SUMMARY_INSERT = "INSERT INTO " + MFC_SUMMARY_TABLE_NAME + today + \
+                               """ (mfcid, hostname, ip, sample_id, ts, value)
+                               VALUES (%(mfcid)s, %(hostname)s, %(ip)s, %(sample_id)s, %(ts)s, %(value)s)
+                               """
+
         data = r.blpop(config.get('constants', 'REDIS_MFC_STORE_QUEUE_KEY'))
         counters = json.loads(data[1])
 
@@ -478,23 +484,31 @@ def store_mfc_stats():
 
 @celery.task
 def store_cluster_stats():
+    from datetime import date
     from analyticsengine.dbmanager.mfc.schema import (CLUSTER_STATS_TABLE_NAME, CLUSTER_SUMMARY_TABLE_NAME,
                                                       CLUSTER_SAMPLE_MAP_TABLE_NAME)
     from analyticsengine import dbmanager
     from collections import Counter
 
     db_connection = dbmanager.connect_cassandra()
-    DAILY_TABLE_INSERT = "INSERT INTO " + CLUSTER_STATS_TABLE_NAME + """ (name, ts, sample_id, value)
-                        VALUES (%(name)s, %(ts)s, %(sample_id)s, %(value)s)
-                        """
-    DAILY_SUMMARY_TABLE_INSERT = "INSERT INTO " + CLUSTER_SUMMARY_TABLE_NAME + """ (name, ts, sample_id, value)
-                        VALUES (%(name)s, %(ts)s, %(sample_id)s, %(value)s)
-                        """
+    date_strf = lambda dt: dt.strftime('%m%d%Y')
 
-    SAMPLE_MAP_INSERT = "INSERT INTO " + CLUSTER_SAMPLE_MAP_TABLE_NAME + """ (sample_id, ts, ip_list)
-                        VALUES (%(sample_id)s, %(ts)s, %(ip_list)s)
-                        """
     while True:
+        today = date_strf(date.today())
+        DAILY_TABLE_INSERT = "INSERT INTO " + CLUSTER_STATS_TABLE_NAME + today + \
+                             """
+                             (name, ts, sample_id, value) VALUES (%(name)s, %(ts)s, %(sample_id)s, %(value)s)
+                             """
+        DAILY_SUMMARY_TABLE_INSERT = "INSERT INTO " + CLUSTER_SUMMARY_TABLE_NAME + today + \
+                                     """
+                                     (name, ts, sample_id, value) VALUES (%(name)s, %(ts)s, %(sample_id)s, %(value)s)
+                                     """
+
+        SAMPLE_MAP_INSERT = "INSERT INTO " + CLUSTER_SAMPLE_MAP_TABLE_NAME + today + \
+                            """
+                            (sample_id, ts, ip_list) VALUES (%(sample_id)s, %(ts)s, %(ip_list)s)
+                            """
+
         data = r.blpop(config.get('constants', 'REDIS_CLUSTER_STORE_QUEUE_KEY'))
         sample_id, counters = eval(data[1])
 
