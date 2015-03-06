@@ -2,8 +2,11 @@ wheel==0.23.0
 celery==3.0.20
 flower==0.7.3
 redis==2.10.3
+redis-collections==0.1.7
 lxml==3.4.1
 gevent==1.0.1
+geventhttpclient==1.1.0
+schedule==0.3.1
 cqlengine==0.20.0
 cassandra-driver==2.1.4
 MySQL-python==1.2.5
