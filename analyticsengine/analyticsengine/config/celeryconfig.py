@@ -3,9 +3,9 @@ __author__ = 'sarink'
 # config file for Celery Daemon
 
 # default Redis broker
-BROKER_URL = 'redis://localhost:6379/0'
+BROKER_URL = 'redis://localhost:6379/15'
 #BROKER_URL = 'redis://localhost'
-CELERY_RESULT_BACKEND = 'redis://localhost:6379/1'
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/16'
 CELERY_IGNORE_RESULT = True
 #CELERY_RESULT_BACKEND = 'redis://localhost:6379/1'
 BROKER_POOL_LIMIT = 100

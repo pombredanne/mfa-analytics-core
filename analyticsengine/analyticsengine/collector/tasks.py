@@ -25,7 +25,7 @@ httplib.patch()
 from geventhttpclient import HTTPClient, URL
 
 #redis.connection.socket = gevent.socket
-r = redis.Redis()
+r = redis.Redis(host=config.get('redis', 'db_host'), port=config.get('redis', 'db_port'), db=config.get('redis', 'db'))
 keys = [config.get('constants', 'REDIS_DEV_LIST_KEY'),
         config.get('constants', 'REDIS_SYNC_DEV_LIST_KEY'),
         config.get('constants', 'REDIS_MFC_UUID_HASH_KEY'),
