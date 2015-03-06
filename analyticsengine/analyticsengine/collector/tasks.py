@@ -601,6 +601,31 @@ def terminate_task(task):
     LOG.info("Exiting the task: ")
     task.revoke(terminate=True)
 
+"""Scheduler task."""
+@celery.task
+def schedule_events_task():
+    import schedule
+    from datetime import date, timedelta
+    from analyticsengine.dbmanager.mfc import create_daily_tables
+
+    """ Job to create daily DB tables
+    calculate the next day's date and pass it to create all the tables for next day.
+    """
+    def create_daily_cf_job():
+        tomorrow = date.today()+timedelta(days=1)
+        tomorrow_strf = tomorrow.strftime('%m%d%Y')
+        LOG.info("Creating tables for date: " + tomorrow_strf)
+        create_daily_tables(tomorrow_strf)
+
+    """ Schedule daily DB table creation.
+    Will create DB tables for next day at 23:30 of every day
+    """
+    schedule.every().day.at("23:30").do(create_daily_cf_job)
+
+    while True:
+        schedule.run_pending()
+        gevent.sleep(1)
+
 
 """Task Runner."""
 
@@ -678,3 +703,9 @@ def run_store_ingestion():
     LOG.info("Store MFC stats task runner with task ID: " + store_mfc_task.task_id)
     LOG.info("Store Cluster stats task runner with task ID: " + store_cluster_task.task_id)
     LOG.info("Store MFC Conf task runner with task ID: " + store_mfc_conf_task.task_id)
+
+
+def run_scheduler():
+    LOG.info("Starting Scheduler task")
+    sched_task = schedule_events_task.apply_async(args=[], queue='tasks', routing_key='tasks')
+    LOG.info("Scheduler task with task ID: " + sched_task.task_id)

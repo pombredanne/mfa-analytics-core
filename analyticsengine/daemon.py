@@ -6,7 +6,7 @@ import gevent.subprocess
 from gevent import monkey
 monkey.patch_all()
 from analyticsengine.collector.tasks import (get_device_list, run_request_fetch, run_request_parser,
-                                             run_process_counters, run_store_ingestion)
+                                             run_process_counters, run_store_ingestion, run_scheduler)
 from analyticsengine.logging import LOG
 from analyticsengine.dbmanager.mfc import create_cluster_tables, create_daily_tables
 
@@ -18,7 +18,7 @@ def run_collector():
     create_cluster_tables()
     create_daily_tables()
     try:
-        tasks = [run_store_ingestion, run_process_counters, run_request_parser, run_request_fetch]
+        tasks = [run_scheduler, run_store_ingestion, run_process_counters, run_request_parser, run_request_fetch]
         g_thread_pool = [gevent.spawn(task) for task in tasks]
         gevent.joinall(g_thread_pool)
     except KeyboardInterrupt:
