@@ -247,7 +247,11 @@ def process_mfc_counters(counters=None, data=None):
     # MFC CHR
     tot_bytes = sum(gl_bytes.values())
     tot_cache = counters['data']['glbl']['bytes']['ram'] + counters['data']['glbl']['bytes']['disk']
-    counters['data']['chr'] = float((decimal.Decimal(tot_cache) / decimal.Decimal(tot_bytes)) * 100)
+    # Handle Zero condition. Cumulative sum could be 0
+    if tot_bytes == 0:
+        counters['data']['chr'] = 0
+    else:
+        counters['data']['chr'] = float((decimal.Decimal(tot_cache) / decimal.Decimal(tot_bytes)) * 100)
 
     #Calculate current throughput
     mfcs_cur_thrpt = Dict(key=config.get('constants', 'REDIS_MFC_CUR_THRPT_KEY'), redis=r)
