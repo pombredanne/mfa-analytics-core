@@ -22,7 +22,8 @@ def create_daily_tables(date_str=None):
     """
     daily_tables['mfc_stats'] = """
                         CREATE TABLE %s%s (mfcid varchar, hostname varchar, ip varchar, type varchar, name varchar,
-                        ts timestamp, value map<text, BigInt>, PRIMARY KEY (mfcid, type, name, ts))
+                        ts timestamp, value map<text, BigInt>, PRIMARY KEY (mfcid, type, name, ts)) WITH CLUSTERING
+                        ORDER BY(type ASC, name ASC, ts DESC)
                         """ % (MFC_STATS_TABLE_NAME, date_str)
     daily_tables['mfc_summary'] = """
                         CREATE TABLE %s%s (mfcid varchar, hostname varchar, ip varchar, ts timestamp, sample_id varchar,
@@ -30,7 +31,8 @@ def create_daily_tables(date_str=None):
                         """ % (MFC_SUMMARY_TABLE_NAME, date_str)
     daily_tables['cluster_stats'] = """
                         CREATE TABLE %s%s (name varchar, ts timestamp,
-                        value map<text, BigInt>, sample_id varchar, PRIMARY KEY (name, ts))
+                        value map<text, BigInt>, sample_id varchar, PRIMARY KEY (name, ts)) WITH CLUSTERING
+                        ORDER BY(ts DESC)
                         """ % (CLUSTER_STATS_TABLE_NAME, date_str)
     daily_tables['cluster_summary'] = """
                         CREATE TABLE %s%s (name varchar, ts timestamp,
