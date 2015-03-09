@@ -243,30 +243,34 @@ def process_mfc_counters(counters=None, data=None):
         data = r.blpop(config.get('constants', 'REDIS_PARSER_QUEUE_KEY'))
         counters = json.loads(data[1])
 
-    gl_bytes = Counter(counters['data']['glbl']['bytes'])
-    # MFC CHR
-    tot_bytes = sum(gl_bytes.values())
-    tot_cache = counters['data']['glbl']['bytes']['ram'] + counters['data']['glbl']['bytes']['disk']
-    # Handle Zero condition. Cumulative sum could be 0
-    if tot_bytes == 0:
-        counters['data']['chr'] = 0
+    if counters['data'] is None:
+        LOG.critical("Device: %s, %s IP: %s" % (counters['device_id'], counters['name'], counters['ip']))
+        LOG.critical("MFC response doesn't have any counter data. skipping sample: %s" % (counters['sample_id']))
     else:
-        counters['data']['chr'] = float((decimal.Decimal(tot_cache) / decimal.Decimal(tot_bytes)) * 100)
+        gl_bytes = Counter(counters['data']['glbl']['bytes'])
+        # MFC CHR
+        tot_bytes = sum(gl_bytes.values())
+        tot_cache = counters['data']['glbl']['bytes']['ram'] + counters['data']['glbl']['bytes']['disk']
+        # Handle Zero condition. Cumulative sum could be 0
+        if tot_bytes == 0:
+            counters['data']['chr'] = 0
+        else:
+            counters['data']['chr'] = float((decimal.Decimal(tot_cache) / decimal.Decimal(tot_bytes)) * 100)
 
-    #Calculate current throughput
-    mfcs_cur_thrpt = Dict(key=config.get('constants', 'REDIS_MFC_CUR_THRPT_KEY'), redis=r)
-    try:
-        counters['data']['cur_thrpt'] = gl_bytes - mfcs_cur_thrpt[counters['device_id']]
-        counters['data']['cur_thrpt']['total'] = sum(counters['data']['cur_thrpt'].values())
-        counters['data']['cur_thrpt']['cache'] = counters['data']['cur_thrpt']['ram'] + \
-                                                 counters['data']['cur_thrpt']['disk']
-        mfcs_cur_thrpt[counters['device_id']] = gl_bytes
-    except KeyError:
-        LOG.debug("current throughput hashmap - Initial update for " + str(counters['device_id']))
-        counters['data']['cur_thrpt'] = mfcs_cur_thrpt[counters['device_id']] = gl_bytes
-        counters['data']['cur_thrpt']['total'] = counters['data']['cur_thrpt']['cache'] = 0
+        #Calculate current throughput
+        mfcs_cur_thrpt = Dict(key=config.get('constants', 'REDIS_MFC_CUR_THRPT_KEY'), redis=r)
+        try:
+            counters['data']['cur_thrpt'] = gl_bytes - mfcs_cur_thrpt[counters['device_id']]
+            counters['data']['cur_thrpt']['total'] = sum(counters['data']['cur_thrpt'].values())
+            counters['data']['cur_thrpt']['cache'] = counters['data']['cur_thrpt']['ram'] + \
+                                                     counters['data']['cur_thrpt']['disk']
+            mfcs_cur_thrpt[counters['device_id']] = gl_bytes
+        except KeyError:
+            LOG.debug("current throughput hashmap - Initial update for " + str(counters['device_id']))
+            counters['data']['cur_thrpt'] = mfcs_cur_thrpt[counters['device_id']] = gl_bytes
+            counters['data']['cur_thrpt']['total'] = counters['data']['cur_thrpt']['cache'] = 0
 
-    r.rpush(config.get('constants', 'REDIS_MFC_STORE_QUEUE_KEY'), json.dumps(counters))
+        r.rpush(config.get('constants', 'REDIS_MFC_STORE_QUEUE_KEY'), json.dumps(counters))
 
     return counters
 
@@ -307,52 +311,58 @@ def process_cluster_stats():
         data = r.blpop(config.get('constants', 'REDIS_PARSER_QUEUE_KEY'))
         counters = json.loads(data[1])
 
-        """Process each MFC counter."""
-        process_mfc_counters.apply_async(args=[counters], queue='process', routing_key='process.stat')
+        #Check if data exist for the parsed response. Agentd response can be empty
+        if counters['data'] is not None:
+            """Process each MFC counter."""
+            process_mfc_counters.apply_async(args=[counters], queue='process', routing_key='process.stat')
 
-        """Process Cluster wide cumulative data for same sample ID."""
-        item_cnt += 1
+            """Process Cluster wide cumulative data for same sample ID."""
+            item_cnt += 1
 
-        # Requests
-        cluster[counters['sample_id']]['requests'].update(counters['data']['glbl']['requests'])
+            # Requests
+            cluster[counters['sample_id']]['requests'].update(counters['data']['glbl']['requests'])
 
-        #Cumulative Bytes
-        cluster[counters['sample_id']]['bytes'].update(counters['data']['glbl']['bytes'])
+            #Cumulative Bytes
+            cluster[counters['sample_id']]['bytes'].update(counters['data']['glbl']['bytes'])
 
-        try:
-            cluster[counters['sample_id']]['ip_list'].append(counters['ip'])  # Preserve the IP
-        except AttributeError:
-            cluster[counters['sample_id']]['ip_list'] = list()
-            cluster[counters['sample_id']]['ip_list'].append(counters['ip'])
+            try:
+                cluster[counters['sample_id']]['ip_list'].append(counters['ip'])  # Preserve the IP
+            except AttributeError:
+                cluster[counters['sample_id']]['ip_list'] = list()
+                cluster[counters['sample_id']]['ip_list'].append(counters['ip'])
 
-        if cur_sample is not None and cur_sample != counters['sample_id']:
-            # new sample has arrived
-            if item_cnt > len(sync_list) or tick(init_sample_ts) >= cluster_sample_timeout:
-                # 1st case: record from all the Sync'd MFCs received. Store and remove the sample from cluster DS.
-                # or 2nd case: some data still left to be received but hit sample time out.
+            if cur_sample is not None and cur_sample != counters['sample_id']:
+                # new sample has arrived
+                if item_cnt > len(sync_list) or tick(init_sample_ts) >= cluster_sample_timeout:
+                    # 1st case: record from all the Sync'd MFCs received. Store and remove the sample from cluster DS.
+                    # or 2nd case: some data still left to be received but hit sample time out.
 
-                #Calculate cumulative Delta.
-                cluster[cur_sample]['cur_thrpt'] = cluster[cur_sample]['bytes'] - cluster['cumulative']['bytes']
-                cluster[cur_sample]['cur_thrpt']['total'] = sum(cluster[cur_sample]['cur_thrpt'].values())
-                cluster[cur_sample]['cur_thrpt']['cache'] = cluster[cur_sample]['cur_thrpt']['ram'] + \
-                                                            cluster[cur_sample]['cur_thrpt']['disk']
+                    #Calculate cumulative Delta.
+                    cluster[cur_sample]['cur_thrpt'] = cluster[cur_sample]['bytes'] - cluster['cumulative']['bytes']
+                    cluster[cur_sample]['cur_thrpt']['total'] = sum(cluster[cur_sample]['cur_thrpt'].values())
+                    cluster[cur_sample]['cur_thrpt']['cache'] = cluster[cur_sample]['cur_thrpt']['ram'] + \
+                                                                cluster[cur_sample]['cur_thrpt']['disk']
 
-                #Preserve the cumulative for next sample set
-                cluster['cumulative']['bytes'] = cluster[cur_sample]['bytes']
+                    #Preserve the cumulative for next sample set
+                    cluster['cumulative']['bytes'] = cluster[cur_sample]['bytes']
 
-                #Push to store the data
-                r.rpush(store_q, (cur_sample, dict(cluster[cur_sample])))
+                    #Push to store the data
+                    r.rpush(store_q, (cur_sample, dict(cluster[cur_sample])))
 
-                del cluster[cur_sample]
-                item_cnt = 1
+                    del cluster[cur_sample]
+                    item_cnt = 1
+                    cur_sample = counters['sample_id']
+                    init_sample_ts = time.time()
+                else:
+                    LOG.info("New sample as started and waiting for old sample to arrive until pushed out")
+
+            if cur_sample is None:
                 cur_sample = counters['sample_id']
                 init_sample_ts = time.time()
-            else:
-                LOG.info("New sample as started and waiting for old sample to arrive until pushed out")
+        else:
+            LOG.critical("Device: %s, %s IP: %s" % (counters['device_id'], counters['name'], counters['ip']))
+            LOG.critical("MFC response doesn't have any counter data. skipping sample: %s" % (counters['sample_id']))
 
-        if cur_sample is None:
-            cur_sample = counters['sample_id']
-            init_sample_ts = time.time()
 
 """Cluster Store Tasks."""
 
