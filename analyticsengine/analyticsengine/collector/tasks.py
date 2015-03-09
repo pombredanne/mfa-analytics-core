@@ -325,6 +325,9 @@ def process_cluster_stats():
             #Cumulative Bytes
             cluster[counters['sample_id']]['bytes'].update(counters['data']['glbl']['bytes'])
 
+            #Timestamp
+            cluster[counters['sample_id']]['timestamp'] = counters['data']['timestamp']
+
             try:
                 cluster[counters['sample_id']]['ip_list'].append(counters['ip'])  # Preserve the IP
             except AttributeError:
@@ -379,18 +382,25 @@ def store_mfc_stats():
     req_interval = int(config.get('collector', 'MFC_REQUEST_FREQUENCY'))
 
     while True:
-        today = date_strf(date.today())
-        DAILY_TABLE_INSERT = "INSERT INTO " + MFC_STATS_TABLE_NAME + today + \
+        data = r.blpop(config.get('constants', 'REDIS_MFC_STORE_QUEUE_KEY'))
+        counters = json.loads(data[1])
+
+        """ CF date suffix
+
+        CF date suffix are calculated based on the timestamp in the response.
+        data can be buffered in queue and may be of different date. Instead of calculating based on current date,
+        its best to stick to the timestamp in the payload as it will then get stored in right CF.
+        This will address the case when queue has buffered data of different date and can recover on a app crash.
+        """
+        date_str = date_strf(date.fromtimestamp(counters['data']['timestamp']))
+        DAILY_TABLE_INSERT = "INSERT INTO " + MFC_STATS_TABLE_NAME + date_str + \
                              """ (mfcid, hostname, ip, ts, type, name, value)
                              VALUES (%(mfcid)s, %(hostname)s, %(ip)s, %(ts)s, %(type)s, %(name)s, %(value)s)
                              """
-        DAILY_SUMMARY_INSERT = "INSERT INTO " + MFC_SUMMARY_TABLE_NAME + today + \
+        DAILY_SUMMARY_INSERT = "INSERT INTO " + MFC_SUMMARY_TABLE_NAME + date_str + \
                                """ (mfcid, hostname, ip, sample_id, ts, value)
                                VALUES (%(mfcid)s, %(hostname)s, %(ip)s, %(sample_id)s, %(ts)s, %(value)s)
                                """
-
-        data = r.blpop(config.get('constants', 'REDIS_MFC_STORE_QUEUE_KEY'))
-        counters = json.loads(data[1])
 
         pk = glbl_bytes = glbl_ds = glbl_ram = glbl_req = glbl_tier = http_ns = sys_stat = dict()
 
@@ -508,26 +518,27 @@ def store_cluster_stats():
     date_strf = lambda dt: dt.strftime('%m%d%Y')
 
     while True:
-        today = date_strf(date.today())
-        DAILY_TABLE_INSERT = "INSERT INTO " + CLUSTER_STATS_TABLE_NAME + today + \
+        data = r.blpop(config.get('constants', 'REDIS_CLUSTER_STORE_QUEUE_KEY'))
+        sample_id, counters = eval(data[1])
+
+        #CF date suffix calculation based on the current timestamp in the payload. Read above for more info.
+        date_str = date_strf(date.fromtimestamp(counters['timestamp']))
+        DAILY_TABLE_INSERT = "INSERT INTO " + CLUSTER_STATS_TABLE_NAME + date_str + \
                              """
                              (name, ts, sample_id, value) VALUES (%(name)s, %(ts)s, %(sample_id)s, %(value)s)
                              """
-        DAILY_SUMMARY_TABLE_INSERT = "INSERT INTO " + CLUSTER_SUMMARY_TABLE_NAME + today + \
+        DAILY_SUMMARY_TABLE_INSERT = "INSERT INTO " + CLUSTER_SUMMARY_TABLE_NAME + date_str + \
                                      """
                                      (name, ts, sample_id, value) VALUES (%(name)s, %(ts)s, %(sample_id)s, %(value)s)
                                      """
 
-        SAMPLE_MAP_INSERT = "INSERT INTO " + CLUSTER_SAMPLE_MAP_TABLE_NAME + today + \
+        SAMPLE_MAP_INSERT = "INSERT INTO " + CLUSTER_SAMPLE_MAP_TABLE_NAME + date_str + \
                             """
                             (sample_id, ts, ip_list) VALUES (%(sample_id)s, %(ts)s, %(ip_list)s)
                             """
 
-        data = r.blpop(config.get('constants', 'REDIS_CLUSTER_STORE_QUEUE_KEY'))
-        sample_id, counters = eval(data[1])
-
         pk = glbl_req = glbl_bytes = sample_map = dict()
-        pk['ts'] = int(time.time()) * 1000
+        pk['ts'] = counters['timestamp'] * 1000
 
         glbl_req.update(pk)
         glbl_req['name'] = 'gl_requests'
