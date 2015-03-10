@@ -306,6 +306,7 @@ def process_cluster_stats():
     cluster_sample_timeout = config.get('constants', 'CLUSTER_SAMPLE_TIMEOUT')
     store_q = config.get('constants', 'REDIS_CLUSTER_STORE_QUEUE_KEY')
     req_interval = int(config.get('collector', 'MFC_REQUEST_FREQUENCY'))
+    sample_q = []
 
     while True:
         data = r.blpop(config.get('constants', 'REDIS_PARSER_QUEUE_KEY'))
@@ -354,10 +355,14 @@ def process_cluster_stats():
 
                     del cluster[cur_sample]
                     item_cnt = 1
-                    cur_sample = counters['sample_id']
+                    cur_sample = sample_q.pop(0) if(len(sample_q) > 0) else counters['sample_id']
                     init_sample_ts = time.time()
                 else:
-                    LOG.info("New sample as started and waiting for old sample to arrive until pushed out")
+                    LOG.info("Got new sample ID: %s. Need to wait for current sample(%s) to arrive until pushed out" %
+                             (counters['sample_id'], cur_sample))
+                    LOG.info("Adding sample ID to the waiting list.")
+                    if counters['sample_id'] not in sample_q:
+                        sample_q.append(counters['sample_id'])
 
             if cur_sample is None:
                 cur_sample = counters['sample_id']
