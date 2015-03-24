@@ -29,7 +29,9 @@ r = redis.Redis(host=config.get('redis', 'db_host'), port=config.get('redis', 'd
 keys = [config.get('constants', 'REDIS_DEV_LIST_KEY'),
         config.get('constants', 'REDIS_SYNC_DEV_LIST_KEY'),
         config.get('constants', 'REDIS_MFC_UUID_HASH_KEY'),
-        config.get('constants', 'REDIS_MFC_CUR_THRPT_KEY')]
+        config.get('constants', 'REDIS_MFC_CUR_THRPT_KEY'),
+        config.get('constants', 'REDIS_UNSYNC_DEV_LIST_KEY'),
+        config.get('constants', 'REDIS_NEW_FOUND_DEV_LIST_KEY')]
 for key in keys:
     if r.exists(key):
         r.delete(key)
@@ -148,24 +150,32 @@ def request_cluster_config(dev_list):
 def request_cluster_stats(sync_mfcs, interval=20):
     req_uri = '/admin/agentd_comm'
     xml_q = config.get('constants', 'REDIS_XML_QUEUE_KEY')
+    new_dev_list_key = config.get('constants', 'REDIS_NEW_FOUND_DEV_LIST_KEY')
+    sync_mfcs_key = config.get('constants', 'REDIS_SYNC_DEV_LIST_KEY')
     signal.signal(signal.SIGQUIT, gevent.kill)
+    stat_clients = []
 
     """Request to synced MFCs
 
     will get the IP list from mfc_uuid
     """
     sync_mfcs_count = len(sync_mfcs)
-    stat_clients = []
 
     LOG.info("Synced MFCs: ")
     for device_id, name, ip in sync_mfcs:
         LOG.info("%s %s %s" % (device_id, name, ip))
 
-    LOG.debug("Creating Stats request clients")
-    for device_id, name, ip in sync_mfcs:
-        url = URL('http://' + ip + ':8080' + req_uri)
-        stat_clients.append(HTTPClient.from_url(url, concurrency=1, headers_type=dict))
+    def create_stat_clients():
+        LOG.info("Creating Stats request clients")
+        for device_id, name, ip in sync_mfcs:
+            url = URL('http://' + ip + ':8080' + req_uri)
+            stat_clients.append(HTTPClient.from_url(url, concurrency=1, headers_type=dict))
 
+    def close_stat_clients():
+        for c in xrange(sync_mfcs_count):
+            stat_clients[c].close()
+
+    create_stat_clients()
     g_req_pool = gevent.pool.Pool(size=sync_mfcs_count)
     LOG.info("Starting to request stats from MFC")
     while True:
@@ -181,38 +191,60 @@ def request_cluster_stats(sync_mfcs, interval=20):
         g_req_pool.join()
         gevent.sleep(interval)
 
-    for i in xrange(sync_mfcs_count):
-        stat_clients[i].close()
+        if r.exists(new_dev_list_key):
+            LOG.info("New MFCs added to the Sync list- updating stat request clients")
+            close_stat_clients()
+            stat_clients = []
+            LOG.info("Newly Synced MFCs: ")
+            new_sync_mfcs = list(List(key=new_dev_list_key, redis=r))
+            for device_id, name, ip in new_sync_mfcs:
+                LOG.info("%s %s %s" % (device_id, name, ip))
+            r.delete(new_dev_list_key)
+            #Get the current synced list and extend with newly synced list
+            sync_mfcs = List(key=sync_mfcs_key, redis=r)
+            sync_mfcs.extend(new_sync_mfcs)
+            sync_mfcs = list(sync_mfcs)
+            sync_mfcs_count = len(sync_mfcs)
+            create_stat_clients()
+
+    close_stat_clients()
 
 """Cluster Parse Tasks."""
 
 @celery.task
 def parse_config_mfc(data=None):
     sync_list = List(key=config.get('constants', 'REDIS_SYNC_DEV_LIST_KEY'), redis=r)
+    unsync_list = List(key=config.get('constants', 'REDIS_UNSYNC_DEV_LIST_KEY'), redis=r)
     if data is None:
         data = r.blpop(config.get('constants', 'REDIS_CONFIG_XML_QUEUE_KEY'))
     data = eval(data[1])
     device = data[0]
     xml = data[1]
     p_obj = Parser.parse_mfc_config(device, xml)
+    if p_obj.header.status_code == 0:
+        """ Update the gloabl DS
 
-    """ Update the gloabl DS
-
-    extend the sync_dev_list with the device tuple
-    Store the UUID in a global hashmap. will be retrieved using IP key.
-    """
-    try:
-        sync_list.extend((device,))
-        mfc_uuid.update({device[2] + '_uuid': p_obj.data.config.host_id})
-        mfc_uuid.update({device[2] + '_hostname': p_obj.data.config.hostname})
-    except AttributeError:
+        extend the sync_dev_list with the device tuple
+        Store the UUID in a global hashmap. will be retrieved using IP key.
+        """
+        try:
+            mfc_uuid.update({device[2] + '_uuid': p_obj.data.config.host_id})
+            mfc_uuid.update({device[2] + '_hostname': p_obj.data.config.hostname})
+            #Update to the sync list if its able to retrieve the data attributes
+            sync_list.extend((device,))
+        except AttributeError:
+            LOG.error("Something wrong with the Config data from MFC: " + device[2])
+            LOG.error("Restart agentd or make sure the config data is valid.")
+            unsync_list.extend((device,))
+        finally:
+            r.rpush(config.get('constants', 'REDIS_CONFIG_STORE_QUEUE_KEY'), Serialize.to_json(p_obj))
+    else:
         LOG.error("Unable to get config from MFC: " + device[2])
         LOG.error("Status Code: %s Message: %s" % (p_obj.header.status_code, p_obj.header.status_msg))
         LOG.error("Check MFC state make sure Agentd is working fine.")
-    finally:
-        r.rpush(config.get('constants', 'REDIS_CONFIG_STORE_QUEUE_KEY'), Serialize.to_json(p_obj))
-        return p_obj
+        unsync_list.extend((device,))
 
+    return p_obj
 
 @celery.task
 def parse_counters(data=None):
