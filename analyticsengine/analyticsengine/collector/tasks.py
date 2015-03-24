@@ -572,6 +572,14 @@ def store_cluster_stats():
         cluster_sum['value'] = dict(counters['cur_thrpt'])
         db_connection.execute(DAILY_SUMMARY_TABLE_INSERT, cluster_sum)
 
+        cluster_sum['name'] = 'cum_bytes'
+        cluster_sum['value'] = dict(counters['bytes'])
+        db_connection.execute(DAILY_SUMMARY_TABLE_INSERT, cluster_sum)
+
+        cluster_sum['name'] = 'requests'
+        cluster_sum['value'] = dict(counters['requests'])
+        db_connection.execute(DAILY_SUMMARY_TABLE_INSERT, cluster_sum)
+
 @celery.task
 def store_mfc_config():
     from analyticsengine.dbmanager.mfc.schema import MFC_CONFIG_TABLE_NAME
