@@ -463,6 +463,9 @@ def store_mfc_stats():
         glbl_ds.update(pk)
         glbl_ds['type'] = 'global'
         glbl_ds['name'] = 'disk_space'
+        #Disk space is in MB. Converting to Bytes
+        for k, v in counters['data']['glbl']['disk_space'].items():
+            counters['data']['glbl']['disk_space'][k] = v * 1024 * 1024
         glbl_ds['value'] = counters['data']['glbl']['disk_space']
 
         #ingest_to_db.apply_async(args=[DailyCounters, session], kwargs=glbl_ds, queue='store',
