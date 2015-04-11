@@ -40,11 +40,14 @@ This will create connection to the cassandra cluster.
 
 
 def connect_cassandra():
+    error = False
     cluster = Cluster([config.get('cassandra', 'db_host')], port=config.get('cassandra', 'db_port'),
                       protocol_version=3, idle_heartbeat_interval=120)
     try:
+        LOG.info("Connecting to Cassandra..")
         return cluster.connect(config.get('cassandra', 'keyspace'))
     except NoHostAvailable:
+        error = True
         LOG.info("ERROR: Check Cassandra connection settings in conf")
     except InvalidRequest:
         LOG.info("ERROR: Could not find existing Cassandra keyspace. will create new one")
@@ -60,11 +63,14 @@ def connect_cassandra():
             LOG.info("Created and session set to new keyspace:  %s" % config.get('cassandra', 'keyspace'))
             return db_connection
         except SyntaxException:
+            error = True
             LOG.info("ERROR: couldn't create new keyspace. check keyspace settings in conf. Exiting now.")
             raise
     except:
+        error = True
         LOG.info("ERROR: something wrong with Cassandra connection")
     finally:
-        LOG.info("Exiting..")
-        sys.exit(0)
+        if error:
+            LOG.info("Exiting..")
+            sys.exit(0)
 

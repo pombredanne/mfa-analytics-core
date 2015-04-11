@@ -188,7 +188,7 @@ def request_cluster_stats(sync_mfcs, interval=20):
         sample_id = str(uuid.uuid1())
         for i in xrange(sync_mfcs_count):
             g_req_pool.spawn(request_stats_mfc_cb, stat_clients[i], sync_mfcs[i], sample_id, xml_q)
-        g_req_pool.join()
+        g_req_pool.join(timeout=interval)
         gevent.sleep(interval)
 
         if r.exists(new_dev_list_key):
