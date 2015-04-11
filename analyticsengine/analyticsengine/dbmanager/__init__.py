@@ -5,6 +5,7 @@ __author__ = 'Juniper Networks'
 from cassandra.cluster import Cluster, NoHostAvailable
 from cassandra import InvalidRequest
 from cassandra.protocol import SyntaxException
+import sys
 
 from analyticsengine.logging import LOG
 from analyticsengine.config import config
@@ -63,4 +64,7 @@ def connect_cassandra():
             raise
     except:
         LOG.info("ERROR: something wrong with Cassandra connection")
+    finally:
+        LOG.info("Exiting..")
+        sys.exit(0)
 
