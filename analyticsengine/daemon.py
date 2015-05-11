@@ -5,7 +5,7 @@ import gevent
 import gevent.subprocess
 from gevent import monkey
 monkey.patch_all()
-from analyticsengine.collector.tasks import (get_device_list, run_request_fetch, run_request_parser,
+from analyticsengine.collector.tasks import (redis_flush_keys, get_device_list, run_request_fetch, run_request_parser,
                                              run_process_counters, run_store_ingestion, run_scheduler)
 from analyticsengine.logging import LOG
 from analyticsengine.dbmanager.mfc import create_cluster_tables, create_daily_tables
@@ -14,6 +14,7 @@ from analyticsengine.dbmanager.mfc import create_cluster_tables, create_daily_ta
 def run_collector():
     LOG.info("Starting collector..")
     gevent.signal(signal.SIGQUIT, gevent.kill)
+    redis_flush_keys()
     get_device_list()
     create_cluster_tables()
     create_daily_tables()

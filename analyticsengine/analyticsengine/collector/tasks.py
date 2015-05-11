@@ -26,18 +26,17 @@ from geventhttpclient import HTTPClient, URL
 
 #redis.connection.socket = gevent.socket
 r = redis.Redis(host=config.get('redis', 'db_host'), port=config.get('redis', 'db_port'), db=config.get('redis', 'db'))
-keys = [config.get('constants', 'REDIS_DEV_LIST_KEY'),
-        config.get('constants', 'REDIS_SYNC_DEV_LIST_KEY'),
-        config.get('constants', 'REDIS_MFC_UUID_HASH_KEY'),
-        config.get('constants', 'REDIS_MFC_CUR_THRPT_KEY'),
-        config.get('constants', 'REDIS_UNSYNC_DEV_LIST_KEY'),
-        config.get('constants', 'REDIS_NEW_FOUND_DEV_LIST_KEY')]
-for key in keys:
-    if r.exists(key):
-        r.delete(key)
-mfa_dev_list = List(key=keys[0], redis=r)
-sync_dev_list = List(key=keys[1], redis=r)
-mfc_uuid = Dict(key=keys[2], redis=r)
+r_keys = {
+    'dev_list': config.get('constants', 'REDIS_DEV_LIST_KEY'),
+    'sync_dev_list': config.get('constants', 'REDIS_SYNC_DEV_LIST_KEY'),
+    'mfc_uuid': config.get('constants', 'REDIS_MFC_UUID_HASH_KEY'),
+    'cur_thrpt': config.get('constants', 'REDIS_MFC_CUR_THRPT_KEY'),
+    'unsync_dev_list': config.get('constants', 'REDIS_UNSYNC_DEV_LIST_KEY'),
+    'new_found_dev_list': config.get('constants', 'REDIS_NEW_FOUND_DEV_LIST_KEY')
+}
+mfa_dev_list = List(key=r_keys['dev_list'], redis=r)
+sync_dev_list = List(key=r_keys['sync_dev_list'], redis=r)
+mfc_uuid = Dict(key=r_keys['mfc_uuid'], redis=r)
 
 
 """Cluster Request Tasks"""
@@ -77,11 +76,18 @@ def request_config_mfc_cb(client, device, q_key):
         "Accept": "*/*",
         "connection": "Keep-Alive"
     }
+    #Default response.
+    resp = """<?xml version="1.0"?><mfc-response><header><status><code>504</code>
+    <message>No Response</message></status></header></mfc-response>"""
 
-    LOG.info("Sending request to agentd " + device[2])
-    agentd_resp = client.post(req_uri, body=req_body, headers=req_headers)
-    resp = agentd_resp.read()
-    r.rpush(q_key, [device, resp])
+    try:
+        LOG.info("Sending config sync request to agentd device: %s %s %s " % device)
+        agentd_resp = client.post(req_uri, body=req_body, headers=req_headers)
+        resp = agentd_resp.read()
+    except:
+        LOG.error("Config sync request timed out for device: %s %s %s " % device)
+    finally:
+        r.rpush(q_key, [device, resp])
     return
 
 
@@ -95,22 +101,35 @@ def request_stats_mfc_cb(client, device, sample_id, q_key):
         "Accept": "*/*",
         "connection": "Keep-Alive",
     }
-
     cleanup_pattern = re.compile(r"\n\s*")
-    LOG.info("Sending request to agentd " + device[2])
-    agentd_resp = client.post(req_uri, body=req_body, headers=req_headers)
-    resp = agentd_resp.read()
-    resp = cleanup_pattern.sub("", resp)
-    r.rpush(q_key, [device, sample_id, resp])
+    #Default response.
+    resp = """<?xml version="1.0"?><mfc-response><header><status><code>504</code>
+    <message>No Response</message></status></header></mfc-response>"""
+
+    try:
+        LOG.info("Sending stat request to agentd %s %s %s " % device)
+        agentd_resp = client.post(req_uri, body=req_body, headers=req_headers)
+        resp = agentd_resp.read()
+        resp = cleanup_pattern.sub("", resp)
+    except:
+        LOG.error("Stat request timedout for device: %s %s %s " % device)
+    finally:
+        r.rpush(q_key, [device, sample_id, resp])
     return
 
-
+"""Request device config for the list of devices
+ if the device list is from unsync_list, set the unsync_list flag to True. default is False.
+ when unsync_list is set to True, parse_config_and_update will be set to update new_sync_dev_list instead of sync_list.
+"""
 @celery.task(queue='fetch', routing_key='fetch.config')
-def request_cluster_config(dev_list):
+def request_cluster_config(dev_list, unsync_list=False):
     req_uri = '/admin/agentd_comm'
     conf_q = config.get('constants', 'REDIS_CONFIG_XML_QUEUE_KEY')
     mfc_count = len(dev_list)
     g_pool = gevent.pool.Pool(size=mfc_count)
+    sync_flag = True
+    if unsync_list:
+        sync_flag = False
 
     LOG.debug("Creating Config request clients")
     conf_clients = []
@@ -118,11 +137,11 @@ def request_cluster_config(dev_list):
         url = URL('http://' + device[2] + ':8080' + req_uri)
         conf_clients.append(HTTPClient.from_url(url, concurrency=1, headers_type=dict))
 
-    LOG.info("Starting to request Config from MFC")
+    LOG.debug("Starting to request Config from MFC")
     for i in xrange(mfc_count):
         g_pool.spawn(request_config_mfc_cb, conf_clients[i], dev_list[i], conf_q)
     g_pool.join()
-    LOG.info("Finished collecting Config from MFC")
+    LOG.debug("Finished collecting Config from MFC")
 
     for i in xrange(mfc_count):
         conf_clients[i].close()
@@ -130,19 +149,17 @@ def request_cluster_config(dev_list):
     """Parse and store the config.
 
     mfc_uuid is a global hashmap(redis Dict) with ip as key and UUID as value
-    parse_config_mfc will update the sync_dev_list, mfc_uuid for each XML response.
+    parse_config_and_sync will update the sync_dev_list, mfc_uuid for each XML response.
     """
-    LOG.info("Parsing and building the UUID hash. will push the config to db")
+    LOG.debug("Parsing config request output and building the UUID hash.")
     q_len = r.llen(conf_q)
     g_pool = gevent.pool.Pool(size=q_len)
     for _ in xrange(q_len):
         data = r.blpop(conf_q)
-        g_pool.spawn(parse_config_mfc, data)
+        g_pool.spawn(parse_config_and_sync, data, sync_flag)
     g_pool.join()
 
     """Return list of MFCs which was able to communicate."""
-    #keys = mfc_uuid.keys()
-    #return list(set(map(lambda val: val.strip("_hostname _uuid"), keys)))
     sync_list = List(key=config.get('constants', 'REDIS_SYNC_DEV_LIST_KEY'), redis=r)
     return list(sync_list)
 
@@ -151,6 +168,7 @@ def request_cluster_stats(sync_mfcs, interval=20):
     req_uri = '/admin/agentd_comm'
     xml_q = config.get('constants', 'REDIS_XML_QUEUE_KEY')
     new_dev_list_key = config.get('constants', 'REDIS_NEW_FOUND_DEV_LIST_KEY')
+    new_sync_dev_list_key = config.get('constants', 'REDIS_NEW_SYNC_DEV_LIST_KEY')
     sync_mfcs_key = config.get('constants', 'REDIS_SYNC_DEV_LIST_KEY')
     signal.signal(signal.SIGQUIT, gevent.kill)
     stat_clients = []
@@ -191,12 +209,12 @@ def request_cluster_stats(sync_mfcs, interval=20):
         g_req_pool.join(timeout=interval)
         gevent.sleep(interval)
 
-        if r.exists(new_dev_list_key):
+        if r.exists(new_sync_dev_list_key):
             LOG.info("New MFCs added to the Sync list- updating stat request clients")
             close_stat_clients()
             stat_clients = []
             LOG.info("Newly Synced MFCs: ")
-            new_sync_mfcs = list(List(key=new_dev_list_key, redis=r))
+            new_sync_mfcs = list(List(key=new_sync_dev_list_key, redis=r))
             for device_id, name, ip in new_sync_mfcs:
                 LOG.info("%s %s %s" % (device_id, name, ip))
             r.delete(new_dev_list_key)
@@ -209,11 +227,20 @@ def request_cluster_stats(sync_mfcs, interval=20):
 
     close_stat_clients()
 
-"""Cluster Parse Tasks."""
+"""Cluster Parse Tasks.
+ parse XML config data and add the device to sync or unsync depending on the parsed obj.
+ default sync list the sync_dev_list.
+ in the case of recheck on the unsync devices, sync_list will be set to False. And upon successful response obj,
+ the device will be added to new_sync_dev_list which will be checked inside the request_cluster_stats task.
+"""
 
 @celery.task
-def parse_config_mfc(data=None):
-    sync_list = List(key=config.get('constants', 'REDIS_SYNC_DEV_LIST_KEY'), redis=r)
+def parse_config_and_sync(data=None, sync_list=True):
+    if sync_list:
+        sync_list = List(key=config.get('constants', 'REDIS_SYNC_DEV_LIST_KEY'), redis=r)
+    else:
+        sync_list = List(key=config.get('constants', 'REDIS_NEW_SYNC_DEV_LIST_KEY'), redis=r)
+
     unsync_list = List(key=config.get('constants', 'REDIS_UNSYNC_DEV_LIST_KEY'), redis=r)
     if data is None:
         data = r.blpop(config.get('constants', 'REDIS_CONFIG_XML_QUEUE_KEY'))
@@ -676,6 +703,9 @@ def schedule_events_task():
     import schedule
     from datetime import date, timedelta
     from analyticsengine.dbmanager.mfc import create_daily_tables
+    unsync_dev_key = config.get('constants', 'REDIS_UNSYNC_DEV_LIST_KEY')
+    unsync_flag = False
+
 
     """ Job to create daily DB tables
     calculate the next day's date and pass it to create all the tables for next day.
@@ -691,12 +721,52 @@ def schedule_events_task():
     """
     schedule.every().day.at("23:30").do(create_daily_cf_job)
 
+    """ Job to recheck un-synced devices
+    if unsync_dev_list exist, config request should be sent to see if the device can be moved to sync.
+    devices are popped from unsync list as they are prepared for recheck. when device get send to check
+    config(Sync check), they get added to unsync if its not able to sync.
+    """
+    def recheck_unsync_devices():
+        unsync_list = List(key=config.get('constants', 'REDIS_UNSYNC_DEV_LIST_KEY'), redis=r)
+        recheck_devices = []
+        while len(unsync_list) > 0:
+            recheck_devices.append(unsync_list.pop())
+
+        LOG.info("Processing unsync device list")
+        recheck_task = chain(request_cluster_config.s(recheck_devices), update_unsync_list.s())
+        recheck_task.apply_async()
+
     while True:
         schedule.run_pending()
         gevent.sleep(1)
 
+        if r.exists(unsync_dev_key):
+            if not unsync_flag:
+                LOG.info("Unsync device list found. will schedule job to recheck the status")
+                schedule.every(int(config.get('collector', 'RECHECK_UNSYNC_FREQUENCY'))).minutes.do(recheck_unsync_devices)
+                unsync_flag = True
+            else:
+                LOG.debug("Recheck Unsync devices is already scheduled and is in progress.")
+        else:
+            if unsync_flag:
+                LOG.info("No Unsync devices found. Removing unsync devices rechecking from scheduler")
+                schedule.cancel_job(recheck_unsync_devices)
+                unsync_flag = False
+
+@celery.task
+def update_unsync_list(sync_list):
+    unsync_list = List(key=config.get('constants', 'REDIS_UNSYNC_DEV_LIST_KEY'), redis=r)
+    for device in unsync_list:
+        if device in sync_list:
+            unsync_list.remove(device)
 
 """Task Runner."""
+def redis_flush_keys():
+    for name, key in r_keys.items():
+        if r.exists(key):
+            LOG.info("Deleting existing redis key: %s" % key)
+            r.delete(key)
+
 
 def get_device_list(get_dev_from_file=False):
     from analyticsengine import dbmanager
@@ -712,6 +782,8 @@ def get_device_list(get_dev_from_file=False):
         rows = mysql_cur.fetchmany(500)
         while len(rows) > 0:
             mfa_dev_list.extend(rows)
+            for device in rows:
+                LOG.info("Found Device: %s %s %s" % device)
             rows = mysql_cur.fetchmany(500)
         mysql_db.close()
         #mfa_dev_list.extend([('2327015', 'Blaster-vJCE-005', '10.87.132.47'),])

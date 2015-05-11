@@ -37,6 +37,7 @@ config.set('constants', 'REDIS_DEV_LIST_KEY', 'dev_list')
 config.set('constants', 'REDIS_SYNC_DEV_LIST_KEY', 'sync_dev_list')
 config.set('constants', 'REDIS_UNSYNC_DEV_LIST_KEY', 'unsync_dev_list')
 config.set('constants', 'REDIS_NEW_FOUND_DEV_LIST_KEY', 'new_found_dev_list')
+config.set('constants', 'REDIS_NEW_SYNC_DEV_LIST_KEY', 'new_sync_dev_list')
 config.set('constants', 'REDIS_MFC_CUR_THRPT_KEY', 'mfc_cur_thrpt')
 # MySQL
 config.set('constants', 'MYSQL_CONNECT_TIMEOUT', 60)
